@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+# Handle SIGTERM by killing the Python process
+cleanup() {
+    # Kill the Python process and its children
+    if [ -n "$python_pid" ]; then
+        pkill -P $python_pid
+        kill $python_pid 2>/dev/null
+    fi
+    exit 0
+}
+
+# Set up trap for SIGTERM and SIGINT
+trap cleanup SIGTERM SIGINT
+
+# Start Python process and capture its PID
+python3 -m satfuzzer.main "$@" &
+python_pid=$!
+
+# Wait for Python process to finish
+wait $python_pid

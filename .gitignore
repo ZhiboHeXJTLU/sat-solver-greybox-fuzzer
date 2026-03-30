@@ -1,0 +1,21 @@
+# Solver build products
+*.o
+*.gcov
+*.gcda
+*.gcno
+*.gcov.json*
+sat
+
+# Fuzzer outputs
+fuzzed-tests/
+fuzzed-outputs/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Temporary .cnf file
+temp.cnf
+
+# Crash files
+crash_*
