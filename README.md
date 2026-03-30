@@ -1,69 +1,162 @@
-# 70024 Software Reliability Fuzzer Coursework
+# 70024 Software Reliability SAT Solver Greybox Fuzzer Coursework
 
-This is the base repository for your fuzzer coursework.
-You should write your code here.
+An AFL-inspired greybox mutation-based fuzzer for DIMACS CNF SAT solvers, developed for the 70024 Software Reliability coursework at Imperial College London.
 
-## The fuzzer interface
+This project combines grammar-aware mutation, sanitizer feedback, and gcov-based coverage guidance to discover diverse bug-inducing inputs for SAT solvers.
 
-In this coursework, you will implement a DIMACS fuzzer.
-DIMACS is a format describing a boolean formula in conjunctive normal form (CNF).
-Some information about this format can be found at the following links:
+## Overview
 
-- <https://fairmut3x.wordpress.com/2011/07/29/cnf-conjunctive-normal-form-dimacs-format-explained/>
-- <http://www.domagoj-babic.com/uploads/ResearchProjects/Spear/dimacs-cnf.pdf>
+The goal of this project is to test SAT solvers by automatically generating and mutating DIMACS-format CNF inputs, then using runtime feedback to identify interesting behaviors.
 
-The aim of the fuzzer is to find bugs in SAT solvers that were built in C by some of your peers in previous years.
-Your fuzzer will take as input one of these SAT solvers.
-We also refer to the SAT solver that your fuzzer is applied to as SUT which stands for *system under test*.
-To further test your fuzzer, note that you can (and are encouraged to) also use a production level SAT solver (such as MiniSAT <http://github.com/niklasso/minisat>) as SUT.
+The fuzzer is designed as a smart greybox mutation-based fuzzer. Instead of relying only on random byte-level corruption, it exploits the structure of the DIMACS format and uses:
 
-The interface of the resulting fuzzer should be `fuzz-sat /path/to/SUT /path/to/inputs seed` where:
+- **ASan / UBSan** to identify undefined behaviors
+- **gcov** to track coverage and execution diversity
+- **queue-based scheduling** inspired by AFL
+- **eviction logic** to retain diverse bug-inducing tests
 
-- `/path/to/SUT` refers to the source directory of the SUT containing the built solver (with gcov coverage information, ASan, and UBSan enabled) and the `runsat.sh` script that needs to be used to run the solver. The `runsat.sh` script expects a single command line argument, the path to a file containing the input formula, and prints out whether the formula was satisfiable, optionally a model, and the error reports of ASan and UBSan if any issues were detected.
-- `/path/to/inputs` refers to a directory containing a non-empty set of well-formed DIMACS files.
-- `seed` is an integer that you should use to initialize a random number generator if you need one.
+## Key Features
 
-## The build script
+- AFL-inspired queue-based greybox fuzzing workflow
+- Grammar-aware mutation for DIMACS CNF SAT inputs
+- Three mutation modes:
+  - **Structured mutation** for semantically valid transformations
+  - **Syntactic mutation** for parser robustness testing
+  - **Unstructured mutation** for random raw-byte corruption
+- Feedback from:
+  - AddressSanitizer (ASan)
+  - UndefinedBehaviorSanitizer (UBSan)
+  - gcov coverage files
+- Coverage-guided input selection with exponential bucketing
+- Eviction policy to retain up to 20 diverse bug-inducing test cases
+- Profiling-driven optimization using `cProfile`
 
-In the top-level directory of this repository, you will find the `build.sh` script.
-This script is used to build your fuzzer and you should use it to install any dependencies your fuzzer might need and to compile your fuzzer's source code if necessary.
-After the script runs we expect to find the `fuzz-sat` executable described previously in the top-level directory of this repository.
+## Mutation Strategy
 
-You can use the build script to download compilers, interpreters, runtimes, software libraries, and to compile your fuzzer's source code.
-The only requirement is that the script and resulting executable can run on a standard lab-machine with network access.
-However if you plan to use uncommon languages or libraries, we ask that you notify us ahead of time so we can decide whether someone on the team would be able to mark your submission (we might ask you to use a different language if we can not find anyone that can mark your work). 
-If you program in an interpreted language using an interpreter already installed on lab-machines, the build script does not need to do anything.
+The fuzzer uses three disjoint mutation categories.
 
-## The fuzzer output
+### 1. Structured Mutation
 
-Your fuzzer should create a directory `fuzzed-tests` in the **current working directory** that contains at **most 20** test cases that are known to trigger an undefined behavior in the SUT.
-In principle your fuzzer should operate in an infinite loop as follows:
+These mutations preserve DIMACS validity while changing the semantics of the formula. Examples include:
 
-1. Generate an input.
-2. Run the SUT (using the provided `runsat.sh` script) on the input, killing the SUT after a timeout of your choice.
-3. If an undefined behavior was triggered, consider saving the test case in `fuzzed-tests`
-4. Go back to step 1.
+- adding or removing clauses
+- negating literals
+- replacing literals
+- scaling the number of clauses or variables
 
-It is up to you how you handle step 1.
-You could take a generation-based approach, making inputs from scratch, or a mutation-based approach, modifying existing or previously-generated inputs. 
-You could employ dumb fuzzing, generating or mutating without reference to the DIMACS format, or a form of smart fuzzing, generating DIMACS or DIMACS-like inputs, or mutating existing inputs in a manner that partially or wholly respects the DIMACS format.
-It is also up to you whether you try to maximize coverage in a blind fashion, by simply generating a diverse range of inputs that are likely to give high coverage, or whether you do so in a feedback-directed fashion, using coverage information to guide input production.
-For the latter, it is up to you to learn how to use coverage information provided by gcov.
+This allows the fuzzer to explore deeper solver logic while maintaining well-formed CNF structure.
 
-It is important to use a timeout in step 2 since the SUT might enter an infinite loop.
-The challenge is to find a timeout that allows you to get a high fuzzing rate while still running the SUT long enough to achieve good coverage.
+### 2. Syntactic Mutation
 
-In step 3, to determine whether undefined behavior as occurred, you will need to examine the sanitizers' output.
-You might also want to implement an eviction policy that takes SUT coverage and undefined behavior uniqueness into account.
-If you generate more than 20 tests we will select 20 of them at random.
+These mutations intentionally break DIMACS syntax to test parser robustness. Examples include:
 
-You are free to employ parallelism inside your fuzzer, as your implementation will be evaluated on a multi-core system.
-This is usually a good way of increasing the fuzzing rate.
+- replacing literals with malformed strings such as `x` or `NaN`
+- using out-of-bound variable indices
+- removing clause terminators
+- injecting malformed clauses
+
+These cases are useful for triggering sanitizer feedback in parser-related code paths.
+
+### 3. Unstructured Mutation
+
+These mutations perform random byte-level corruption without respecting input grammar. This provides a complementary “dumb fuzzing” mode for exploring unexpected error paths.
+
+## Feedback and Interestingness
+
+Inputs are considered interesting if they:
+
+- trigger new undefined behaviors, or
+- reach new coverage patterns
+
+To capture more nuanced execution differences, coverage information is summarized using **exponential buckets**, rather than storing only exact raw counts.
+
+Interesting inputs are re-added to the queue for further mutation.
+
+## Eviction Policy
+
+The fuzzer keeps up to **20 bug-inducing test cases** in `fuzzed-tests/`.
+
+When the set is full, a new candidate is considered based on whether it improves result diversity. The diversity score takes into account:
+
+1. number of unique error types
+2. number of unique source locations
+3. total number of errors triggered
+
+This helps preserve a compact but diverse set of bug-inducing tests.
+
+## Performance Optimization
+
+During development, profiling with Python `cProfile` revealed that semantic mutation and repeated random calls inside loops were major bottlenecks.
+
+To improve throughput:
+
+- mutation indices were precomputed instead of repeatedly sampling inside loops
+- clause generation was optimized by duplicating existing clauses instead of generating many new ones from scratch
+
+These changes significantly improved fuzzing performance and increased the number of unique bugs found during a run.
+
+## Project Structure
+
+```text
+.
+├── build.sh
+├── fuzz-sat
+├── src/
+├── inputs/
+├── fuzzed-tests/
+├── docs/
+│   └── report.pdf
+└── README.md
+```
+
+## How to Build
+./build.sh
+
+After running the build script, the fuzz-sat executable should be available in the repository root.
+
+## How to Run
+```bash
+./fuzz-sat /path/to/SUT /path/to/inputs 123
+```
+
+Where:
+
+/path/to/SUT is the SAT solver source directory containing the instrumented solver and runsat.sh
+/path/to/inputs is a directory with well-formed DIMACS CNF seed files
+123 is the random seed
+Output
+
+The fuzzer creates a directory named fuzzed-tests/ in the current working directory and stores up to 20 interesting bug-inducing test cases there.
 
 ## Evaluation
 
-When we evaluate your fuzzer, we will run it for 30 minutes per-SUT on a range of SUTs.
-For each SUT we will score you based on:
+The fuzzer was evaluated by running it on multiple SAT solvers and observing:
 
-- The cumulative coverage achieved **during fuzzing**. You do not need to track this, our testing infrastructure will do this for you, but please ensure you don't delete the files generated by `gcov`.
-- The diversity of bug inducing tests that you save in `fuzzed-tests`. If you generate more than 20, we will select 20 at random.
+throughput
+newly discovered undefined behaviors
+new coverage over time
+diversity of saved bug-inducing tests
+
+Short 10-minute evaluation runs were used during development for fast iteration, while the coursework setting evaluated fuzzers over longer runs.
+
+## Coursework Context
+
+This project was developed as part of the 70024 Software Reliability coursework at Imperial College London.
+
+The coursework task was to implement a DIMACS fuzzer for SAT solvers built in C, with feedback collected via gcov, ASan, and UBSan.
+
+## Report
+
+A short report describing the design, optimizations, and evaluation of the fuzzer is available in:
+
+```text
+sat-solver-greybox-fuzzer
+/report.pdf
+```
+## Notes
+
+This repository is intended as a compact project showcase of implementation and testing-tool design experience.
+
+## License
+
+MIT License
